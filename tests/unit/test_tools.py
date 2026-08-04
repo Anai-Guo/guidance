@@ -3,8 +3,10 @@
 See https://github.com/guidance-ai/guidance/issues/1485: ``Tool.call`` used to
 catch ``BaseException`` (swallowing ``KeyboardInterrupt``/``SystemExit`` and
 turning them into tool-output strings) and asserted that the traceback always
-had an inner frame (crashing with a bare ``AssertionError`` when the callable
-was not actually callable).
+had an inner frame. That assert fired whenever the error was raised at the call
+expression itself rather than inside the callable -- most reachably when the
+provider returns an argument set that does not match the tool's signature, which
+raises ``TypeError`` before the callable's frame is ever entered.
 """
 
 import pytest
@@ -40,6 +42,27 @@ def test_call_formats_regular_exception():
     assert "ValueError: kaboom" in result
     # The traceback should start inside the callable, not inside Tool.call.
     assert "raises_value_error" in result
+
+
+def test_call_with_mismatched_arguments_is_formatted_not_asserted():
+    def get_weather(city: str, units: str = "c"):
+        return f"{city}:{units}"
+
+    tool = _tool(get_weather)
+
+    # A provider can return an argument dict that does not match the signature; it is
+    # splatted straight into Tool.call, so the TypeError is raised at the call
+    # expression and never enters get_weather's frame.
+    missing_required = tool.call()
+    assert isinstance(missing_required, str)
+    assert "missing 1 required positional argument" in missing_required
+
+    unexpected = tool.call(city="Rome", zoom=3)
+    assert isinstance(unexpected, str)
+    assert "unexpected keyword argument" in unexpected
+
+    # A well-formed call is unaffected.
+    assert tool.call(city="Rome") == "Rome:c"
 
 
 def test_call_non_callable_reports_type_error():
